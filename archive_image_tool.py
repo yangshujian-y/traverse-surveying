@@ -117,7 +117,7 @@ class ArchiveImageTool(tk.Tk):
 
         self.copy_serial = tk.StringVar(value="-0002")
 
-        self.paginate_recursive = tk.BooleanVar(value=False)
+        self.paginate_recursive = tk.BooleanVar(value=True)
         self.paginate_include_root = tk.BooleanVar(value=False)
         self.paginate_each_folder = tk.BooleanVar(value=True)
         self.keep_original_format = tk.BooleanVar(value=True)
@@ -801,16 +801,24 @@ class ArchiveImageTool(tk.Tk):
     def paginate_images(self, settings: Settings, write_report: bool) -> None:
         source, output = self.validate_source_output(settings)
         self.log_step(f"开始编页。源目录：{source}")
-        self.log_step(f"编页输出目录：{output}")
+        output_root = output / source.name
+        output_root.mkdir(parents=True, exist_ok=True)
+        self.log_step(f"编页输出目录：{output_root}")
         folders = self.target_folders(source, settings.paginate_recursive, settings.paginate_include_root)
         if not folders:
             folders = [source]
 
         images_by_folder = [(folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key)) for folder in folders]
         total = sum(len(items) for _, items in images_by_folder)
+        if total == 0 and not settings.paginate_recursive:
+            self.log_step("当前未勾选递归处理，直属文件夹未发现图片，自动改为扫描所有子文件夹。")
+            folders = self.target_folders(source, True, settings.paginate_include_root)
+            images_by_folder = [(folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key)) for folder in folders]
+            total = sum(len(items) for _, items in images_by_folder)
         if total == 0:
-            raise ValueError("没有找到可编页的图片文件。请确认源文件夹内已经有 jpg/png/tif/bmp/webp 图片，而不是只有 xls 表格或空文件夹。")
-        self.log_step(f"扫描完成：待处理文件夹 {len(images_by_folder)} 个，图片 {total} 张。")
+            raise ValueError("没有找到可编页的图片文件。程序已经扫描源文件夹及所有子文件夹，请确认里面有 jpg/png/tif/bmp/webp 图片。")
+        folders_with_images = sum(1 for _folder, items in images_by_folder if items)
+        self.log_step(f"扫描完成：扫描文件夹 {len(images_by_folder)} 个，有图片文件夹 {folders_with_images} 个，图片 {total} 张。")
 
         font_size = max(8, safe_int(settings.font_size, 36))
         start_page = max(1, safe_int(settings.start_page, 1))
@@ -823,7 +831,7 @@ class ArchiveImageTool(tk.Tk):
             if images:
                 self.log_step(f"开始处理文件夹：{folder}，图片 {len(images)} 张。")
             page = start_page if settings.paginate_each_folder else global_page
-            target_folder = self.mirror_folder(source, folder, output)
+            target_folder = self.mirror_folder(source, folder, output_root)
             target_folder.mkdir(parents=True, exist_ok=True)
             for image_path in images:
                 tasks.append((folder, target_folder, image_path, page))
@@ -1078,6 +1086,10 @@ class ArchiveImageTool(tk.Tk):
 
     def load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         candidates = [
+            "C:/Windows/Fonts/msyh.ttc",
+            "C:/Windows/Fonts/simhei.ttf",
+            "C:/Windows/Fonts/simsun.ttc",
+            "C:/Windows/Fonts/arial.ttf",
             "/System/Library/Fonts/PingFang.ttc",
             "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
             "/Library/Fonts/Arial Unicode.ttf",
