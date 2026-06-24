@@ -1,0 +1,12 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "运行归档工具",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/archive_image_tool.py",
+      "console": "integratedTerminal"
+    }
+  ]
+}
