@@ -119,7 +119,7 @@ class ArchiveImageTool(tk.Tk):
 
         self.paginate_recursive = tk.BooleanVar(value=True)
         self.paginate_include_root = tk.BooleanVar(value=False)
-        self.paginate_each_folder = tk.BooleanVar(value=True)
+        self.paginate_each_folder = tk.BooleanVar(value=False)
         self.keep_original_format = tk.BooleanVar(value=True)
         self.open_output_after = tk.BooleanVar(value=False)
 
@@ -290,7 +290,7 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="同时处理源文件夹本身", variable=self.paginate_include_root).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
-        ttk.Checkbutton(panel, text="每个文件夹都从起始页码重新编号", variable=self.paginate_each_folder).grid(
+        ttk.Label(panel, text="编号规则：按第 3 级文件夹名称顺序，再按其中图片名称顺序，所有图片连续编号。").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
@@ -808,12 +808,12 @@ class ArchiveImageTool(tk.Tk):
         if not folders:
             folders = [source]
 
-        images_by_folder = [(folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key)) for folder in folders]
+        images_by_folder = self.paginate_image_groups(source, folders)
         total = sum(len(items) for _, items in images_by_folder)
         if total == 0 and not settings.paginate_recursive:
             self.log_step("当前未勾选递归处理，直属文件夹未发现图片，自动改为扫描所有子文件夹。")
             folders = self.target_folders(source, True, settings.paginate_include_root)
-            images_by_folder = [(folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key)) for folder in folders]
+            images_by_folder = self.paginate_image_groups(source, folders)
             total = sum(len(items) for _, items in images_by_folder)
         if total == 0:
             raise ValueError("没有找到可编页的图片文件。程序已经扫描源文件夹及所有子文件夹，请确认里面有 jpg/png/tif/bmp/webp 图片。")
@@ -824,19 +824,17 @@ class ArchiveImageTool(tk.Tk):
         start_page = max(1, safe_int(settings.start_page, 1))
         color = parse_color(settings.font_color)
         suffix = settings.file_suffix
-        global_page = start_page
         tasks: list[tuple[Path, Path, Path, int]] = []
+        page = start_page
 
-        for folder, images in images_by_folder:
+        for group_folder, images in images_by_folder:
             if images:
-                self.log_step(f"开始处理文件夹：{folder}，图片 {len(images)} 张。")
-            page = start_page if settings.paginate_each_folder else global_page
-            target_folder = self.mirror_folder(source, folder, output_root)
-            target_folder.mkdir(parents=True, exist_ok=True)
+                self.log_step(f"开始处理第3级文件夹：{group_folder}，图片 {len(images)} 张。")
             for image_path in images:
-                tasks.append((folder, target_folder, image_path, page))
+                target_folder = self.mirror_folder(source, image_path.parent, output_root)
+                target_folder.mkdir(parents=True, exist_ok=True)
+                tasks.append((group_folder, target_folder, image_path, page))
                 page += 1
-                global_page += 1
 
         rows = []
 
@@ -888,6 +886,22 @@ class ArchiveImageTool(tk.Tk):
         if write_report:
             self.write_report(output / "编页统计.csv", rows)
             self.log_step(f"编页统计已生成：{output / '编页统计.csv'}")
+
+    def paginate_image_groups(self, source: Path, folders: list[Path]) -> list[tuple[Path, list[Path]]]:
+        third_level_folders = [folder for folder in folders if self.folder_depth(source, folder) == 3]
+        groups: list[tuple[Path, list[Path]]] = []
+        for folder in sorted(third_level_folders, key=lambda p: [natural_key(Path(part)) for part in p.relative_to(source).parts]):
+            images = sorted(
+                [path for path in folder.rglob("*") if is_image(path)],
+                key=lambda path: [natural_key(Path(part)) for part in path.relative_to(folder).parts],
+            )
+            groups.append((folder, images))
+        if groups:
+            return groups
+        return [
+            (folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key))
+            for folder in folders
+        ]
 
     def paginate_one_image(
         self,
