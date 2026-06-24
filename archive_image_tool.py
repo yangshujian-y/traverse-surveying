@@ -89,6 +89,7 @@ class Settings:
     page_suffix: str
     file_suffix: str
     erase_old_page_numbers: bool
+    auto_orient_binding: bool
     worker_count: str
     open_output_after: bool
 
@@ -132,6 +133,7 @@ class ArchiveImageTool(tk.Tk):
         self.page_suffix = tk.StringVar(value="")
         self.file_suffix = tk.StringVar(value="_页码")
         self.erase_old_page_numbers = tk.BooleanVar(value=True)
+        self.auto_orient_binding = tk.BooleanVar(value=True)
         self.worker_count = tk.StringVar(value="4")
 
         self.boxes = default_boxes()
@@ -298,8 +300,11 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
             row=3, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
+        ttk.Checkbutton(panel, text="按装订规则自动校正横竖方向", variable=self.auto_orient_binding).grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=8, pady=3
+        )
 
-        row = 4
+        row = 5
         for label, var in (
             ("起始页码", self.start_page),
             ("成册文件夹级数", self.paginate_group_level),
@@ -579,6 +584,7 @@ class ArchiveImageTool(tk.Tk):
             page_suffix=self.page_suffix.get(),
             file_suffix=self.file_suffix.get(),
             erase_old_page_numbers=self.erase_old_page_numbers.get(),
+            auto_orient_binding=self.auto_orient_binding.get(),
             worker_count=self.worker_count.get(),
             open_output_after=self.open_output_after.get(),
         )
@@ -829,7 +835,20 @@ class ArchiveImageTool(tk.Tk):
         start_page = max(1, safe_int(settings.start_page, 1))
         color = parse_color(settings.font_color)
         suffix = settings.file_suffix
-        tasks: list[tuple[Path, Path, Path, int]] = []
+        image_sizes = self.inspect_image_sizes([image_path for _folder, images in images_by_folder for image_path in images])
+        layout_by_image = self.classify_page_layouts(image_sizes)
+        if settings.auto_orient_binding:
+            counts: dict[str, int] = {}
+            for layout in layout_by_image.values():
+                counts[layout] = counts.get(layout, 0) + 1
+            self.log_step(
+                "装订方向检查："
+                f"A3 {counts.get('A3', 0)} 张，"
+                f"A4竖版 {counts.get('A4_PORTRAIT', 0)} 张，"
+                f"A4横版 {counts.get('A4_LANDSCAPE', 0)} 张，"
+                f"小于A4 {counts.get('SMALLER_THAN_A4', 0)} 张。"
+            )
+        tasks: list[tuple[Path, Path, Path, int, str]] = []
 
         for group_folder, images in images_by_folder:
             if images:
@@ -838,16 +857,16 @@ class ArchiveImageTool(tk.Tk):
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
                 target_folder.mkdir(parents=True, exist_ok=True)
-                tasks.append((group_folder, target_folder, image_path, page))
+                tasks.append((group_folder, target_folder, image_path, page, layout_by_image.get(image_path, "A4_PORTRAIT")))
                 page += 1
 
         rows = []
 
-        def paginate_task(task: tuple[Path, Path, Path, int]) -> dict[str, object]:
-            folder, target_folder, image_path, page = task
+        def paginate_task(task: tuple[Path, Path, Path, int, str]) -> dict[str, object]:
+            folder, target_folder, image_path, page, page_layout = task
             page_text = f"{settings.page_prefix}{page}{settings.page_suffix}"
             try:
-                output_file = self.paginate_one_image(
+                output_file, orientation_action = self.paginate_one_image(
                     image_path,
                     target_folder,
                     page_text,
@@ -857,10 +876,13 @@ class ArchiveImageTool(tk.Tk):
                     suffix,
                     folder,
                     settings.erase_old_page_numbers,
+                    settings.auto_orient_binding,
+                    page_layout,
                 )
                 status = "paged"
             except Exception as exc:
                 output_file = target_folder / image_path.name
+                orientation_action = "error"
                 status = f"error: {exc}"
             return {
                 "type": "paginate",
@@ -868,6 +890,8 @@ class ArchiveImageTool(tk.Tk):
                 "source_file": str(image_path),
                 "output_file": str(output_file),
                 "page": page,
+                "page_layout": page_layout,
+                "orientation_action": orientation_action,
                 "erase_old_page_numbers": settings.erase_old_page_numbers,
                 "status": status,
             }
@@ -881,7 +905,7 @@ class ArchiveImageTool(tk.Tk):
                 rows.append(row)
                 self.set_status(f"编页中 {processed}/{total}：{Path(str(row['source_file'])).name}")
                 if processed == 1 or processed == total or processed % 20 == 0:
-                    self.log_step(f"编页进度 {processed}/{total}：{row['source_file']}")
+                    self.log_step(f"编页进度 {processed}/{total}：{row['source_file']}，方向处理：{row['orientation_action']}")
                 self.set_progress(processed / total * 100)
 
         self.log_rows.extend(rows)
@@ -908,6 +932,48 @@ class ArchiveImageTool(tk.Tk):
             for folder in folders
         ]
 
+    def inspect_image_sizes(self, image_paths: list[Path]) -> dict[Path, tuple[int, int]]:
+        sizes: dict[Path, tuple[int, int]] = {}
+        for path in image_paths:
+            try:
+                with Image.open(path) as image:
+                    width, height = ImageOps.exif_transpose(image).size
+                sizes[path] = (width, height)
+            except Exception:
+                continue
+        return sizes
+
+    def classify_page_layouts(self, sizes: dict[Path, tuple[int, int]]) -> dict[Path, str]:
+        if not sizes:
+            return {}
+        areas = sorted(width * height for width, height in sizes.values())
+        median_area = areas[len(areas) // 2]
+        layouts: dict[Path, str] = {}
+        for path, (width, height) in sizes.items():
+            area = width * height
+            if area >= median_area * 1.65:
+                layout = "A3"
+            elif area <= median_area * 0.62:
+                layout = "SMALLER_THAN_A4"
+            elif width > height:
+                layout = "A4_LANDSCAPE"
+            else:
+                layout = "A4_PORTRAIT"
+            layouts[path] = layout
+        return layouts
+
+    def apply_binding_orientation(self, image: Image.Image, page_layout: str) -> tuple[Image.Image, str]:
+        width, height = image.size
+        if page_layout in {"A3", "A4_LANDSCAPE"}:
+            if height > width:
+                return image.rotate(90, expand=True), f"{page_layout}: rotate 90 to landscape"
+            return image, f"{page_layout}: keep landscape"
+        if page_layout in {"A4_PORTRAIT", "SMALLER_THAN_A4"}:
+            if width > height:
+                return image.rotate(90, expand=True), f"{page_layout}: rotate 90 to portrait"
+            return image, f"{page_layout}: keep portrait"
+        return image, "unknown: keep"
+
     def paginate_one_image(
         self,
         image_path: Path,
@@ -919,8 +985,13 @@ class ArchiveImageTool(tk.Tk):
         suffix: str,
         source_folder: Path,
         erase_old_page_numbers: bool,
-    ) -> Path:
+        auto_orient_binding: bool,
+        page_layout: str,
+    ) -> tuple[Path, str]:
         image = ImageOps.exif_transpose(Image.open(image_path))
+        orientation_action = "disabled"
+        if auto_orient_binding:
+            image, orientation_action = self.apply_binding_orientation(image, page_layout)
         mode = image.mode
         if mode not in ("RGB", "RGBA"):
             image = image.convert("RGB")
@@ -947,7 +1018,7 @@ class ArchiveImageTool(tk.Tk):
             if image.mode == "RGBA":
                 image = image.convert("RGB")
         image.save(output_file, **save_kwargs)
-        return output_file
+        return output_file, orientation_action
 
     def page_side_for_folder(self, folder: Path, page_number: int) -> str:
         if self.folder_numeric_suffix(folder) in {"0005", "0007"}:
