@@ -835,7 +835,9 @@ class ArchiveImageTool(tk.Tk):
         start_page = max(1, safe_int(settings.start_page, 1))
         color = parse_color(settings.font_color)
         suffix = settings.file_suffix
-        image_sizes = self.inspect_image_sizes([image_path for _folder, images in images_by_folder for image_path in images])
+        worker_count = self.worker_count_value(settings)
+        all_images = [image_path for _folder, images in images_by_folder for image_path in images]
+        image_sizes = self.inspect_image_sizes(all_images, worker_count)
         layout_by_image = self.classify_page_layouts(image_sizes)
         if settings.auto_orient_binding:
             counts: dict[str, int] = {}
@@ -850,9 +852,13 @@ class ArchiveImageTool(tk.Tk):
             )
         tasks: list[tuple[Path, Path, Path, int, str]] = []
 
-        for group_folder, images in images_by_folder:
+        for group_index, (group_folder, images) in enumerate(images_by_folder, start=1):
             if images:
-                self.log_step(f"开始处理第{group_level}级成册文件夹：{group_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。")
+                if group_index == 1 or group_index == len(images_by_folder) or group_index % 100 == 0:
+                    self.log_step(
+                        f"建立编页任务 {group_index}/{len(images_by_folder)}："
+                        f"{group_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。"
+                    )
             page = start_page
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
@@ -896,7 +902,6 @@ class ArchiveImageTool(tk.Tk):
                 "status": status,
             }
 
-        worker_count = self.worker_count_value(settings)
         self.log_step(f"开始并行编页：图片 {len(tasks)} 张，并行线程 {worker_count}。")
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = [executor.submit(paginate_task, task) for task in tasks]
@@ -906,7 +911,7 @@ class ArchiveImageTool(tk.Tk):
                 self.set_status(f"编页中 {processed}/{total}：{Path(str(row['source_file'])).name}")
                 if processed == 1 or processed == total or processed % 20 == 0:
                     self.log_step(f"编页进度 {processed}/{total}：{row['source_file']}，方向处理：{row['orientation_action']}")
-                self.set_progress(processed / total * 100)
+                self.set_progress(12 + processed / total * 88)
 
         self.log_rows.extend(rows)
         success = sum(r["status"] == "paged" for r in rows)
@@ -932,15 +937,30 @@ class ArchiveImageTool(tk.Tk):
             for folder in folders
         ]
 
-    def inspect_image_sizes(self, image_paths: list[Path]) -> dict[Path, tuple[int, int]]:
+    def inspect_image_sizes(self, image_paths: list[Path], worker_count: int) -> dict[Path, tuple[int, int]]:
         sizes: dict[Path, tuple[int, int]] = {}
-        for path in image_paths:
+        if not image_paths:
+            return sizes
+        self.log_step(f"开始检查图片尺寸和装订方向：图片 {len(image_paths)} 张，并行线程 {worker_count}。")
+
+        def read_size(path: Path) -> tuple[Path, tuple[int, int] | None]:
             try:
                 with Image.open(path) as image:
                     width, height = ImageOps.exif_transpose(image).size
-                sizes[path] = (width, height)
+                return path, (width, height)
             except Exception:
-                continue
+                return path, None
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = [executor.submit(read_size, path) for path in image_paths]
+            for processed, future in enumerate(as_completed(futures), start=1):
+                path, size = future.result()
+                if size is not None:
+                    sizes[path] = size
+                if processed == 1 or processed == len(image_paths) or processed % 200 == 0:
+                    self.set_status(f"检查图片尺寸 {processed}/{len(image_paths)}")
+                    self.log_step(f"图片尺寸检查进度 {processed}/{len(image_paths)}。")
+                self.set_progress(processed / len(image_paths) * 12)
         return sizes
 
     def classify_page_layouts(self, sizes: dict[Path, tuple[int, int]]) -> dict[Path, str]:
