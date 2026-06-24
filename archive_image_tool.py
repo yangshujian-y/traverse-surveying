@@ -292,7 +292,7 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="同时处理源文件夹本身", variable=self.paginate_include_root).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
-        ttk.Label(panel, text="编号规则：按指定级别文件夹名称顺序，再按其中图片名称顺序，所有图片连续编号。").grid(
+        ttk.Label(panel, text="编号规则：按指定级别文件夹成册；每个成册文件夹内从起始页码编到最后。").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
@@ -302,7 +302,7 @@ class ArchiveImageTool(tk.Tk):
         row = 4
         for label, var in (
             ("起始页码", self.start_page),
-            ("连续编号文件夹级数", self.paginate_group_level),
+            ("成册文件夹级数", self.paginate_group_level),
             ("字体大小", self.font_size),
             ("并行线程数", self.worker_count),
             ("页码前缀", self.page_prefix),
@@ -823,18 +823,18 @@ class ArchiveImageTool(tk.Tk):
         if total == 0:
             raise ValueError("没有找到可编页的图片文件。程序已经扫描源文件夹及所有子文件夹，请确认里面有 jpg/png/tif/bmp/webp 图片。")
         folders_with_images = sum(1 for _folder, items in images_by_folder if items)
-        self.log_step(f"扫描完成：按第 {group_level} 级文件夹连续编号；扫描分组 {len(images_by_folder)} 个，有图片分组 {folders_with_images} 个，图片 {total} 张。")
+        self.log_step(f"扫描完成：按第 {group_level} 级文件夹分别成册编号；扫描分组 {len(images_by_folder)} 个，有图片分组 {folders_with_images} 个，图片 {total} 张。")
 
         font_size = max(8, safe_int(settings.font_size, 36))
         start_page = max(1, safe_int(settings.start_page, 1))
         color = parse_color(settings.font_color)
         suffix = settings.file_suffix
         tasks: list[tuple[Path, Path, Path, int]] = []
-        page = start_page
 
         for group_folder, images in images_by_folder:
             if images:
-                self.log_step(f"开始处理第{group_level}级文件夹：{group_folder}，图片 {len(images)} 张。")
+                self.log_step(f"开始处理第{group_level}级成册文件夹：{group_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。")
+            page = start_page
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
                 target_folder.mkdir(parents=True, exist_ok=True)
