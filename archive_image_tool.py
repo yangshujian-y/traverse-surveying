@@ -81,6 +81,7 @@ class Settings:
     paginate_recursive: bool
     paginate_include_root: bool
     paginate_each_folder: bool
+    paginate_group_level: str
     font_size: str
     font_color: str
     start_page: str
@@ -120,6 +121,7 @@ class ArchiveImageTool(tk.Tk):
         self.paginate_recursive = tk.BooleanVar(value=True)
         self.paginate_include_root = tk.BooleanVar(value=False)
         self.paginate_each_folder = tk.BooleanVar(value=False)
+        self.paginate_group_level = tk.StringVar(value="3")
         self.keep_original_format = tk.BooleanVar(value=True)
         self.open_output_after = tk.BooleanVar(value=False)
 
@@ -290,7 +292,7 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="同时处理源文件夹本身", variable=self.paginate_include_root).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
-        ttk.Label(panel, text="编号规则：按第 3 级文件夹名称顺序，再按其中图片名称顺序，所有图片连续编号。").grid(
+        ttk.Label(panel, text="编号规则：按指定级别文件夹名称顺序，再按其中图片名称顺序，所有图片连续编号。").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
@@ -300,6 +302,7 @@ class ArchiveImageTool(tk.Tk):
         row = 4
         for label, var in (
             ("起始页码", self.start_page),
+            ("连续编号文件夹级数", self.paginate_group_level),
             ("字体大小", self.font_size),
             ("并行线程数", self.worker_count),
             ("页码前缀", self.page_prefix),
@@ -568,6 +571,7 @@ class ArchiveImageTool(tk.Tk):
             paginate_recursive=self.paginate_recursive.get(),
             paginate_include_root=self.paginate_include_root.get(),
             paginate_each_folder=self.paginate_each_folder.get(),
+            paginate_group_level=self.paginate_group_level.get(),
             font_size=self.font_size.get(),
             font_color=self.font_color.get(),
             start_page=self.start_page.get(),
@@ -808,17 +812,18 @@ class ArchiveImageTool(tk.Tk):
         if not folders:
             folders = [source]
 
-        images_by_folder = self.paginate_image_groups(source, folders)
+        group_level = max(1, safe_int(settings.paginate_group_level, 3))
+        images_by_folder = self.paginate_image_groups(source, folders, group_level)
         total = sum(len(items) for _, items in images_by_folder)
         if total == 0 and not settings.paginate_recursive:
             self.log_step("当前未勾选递归处理，直属文件夹未发现图片，自动改为扫描所有子文件夹。")
             folders = self.target_folders(source, True, settings.paginate_include_root)
-            images_by_folder = self.paginate_image_groups(source, folders)
+            images_by_folder = self.paginate_image_groups(source, folders, group_level)
             total = sum(len(items) for _, items in images_by_folder)
         if total == 0:
             raise ValueError("没有找到可编页的图片文件。程序已经扫描源文件夹及所有子文件夹，请确认里面有 jpg/png/tif/bmp/webp 图片。")
         folders_with_images = sum(1 for _folder, items in images_by_folder if items)
-        self.log_step(f"扫描完成：扫描文件夹 {len(images_by_folder)} 个，有图片文件夹 {folders_with_images} 个，图片 {total} 张。")
+        self.log_step(f"扫描完成：按第 {group_level} 级文件夹连续编号；扫描分组 {len(images_by_folder)} 个，有图片分组 {folders_with_images} 个，图片 {total} 张。")
 
         font_size = max(8, safe_int(settings.font_size, 36))
         start_page = max(1, safe_int(settings.start_page, 1))
@@ -829,7 +834,7 @@ class ArchiveImageTool(tk.Tk):
 
         for group_folder, images in images_by_folder:
             if images:
-                self.log_step(f"开始处理第3级文件夹：{group_folder}，图片 {len(images)} 张。")
+                self.log_step(f"开始处理第{group_level}级文件夹：{group_folder}，图片 {len(images)} 张。")
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
                 target_folder.mkdir(parents=True, exist_ok=True)
@@ -887,10 +892,10 @@ class ArchiveImageTool(tk.Tk):
             self.write_report(output / "编页统计.csv", rows)
             self.log_step(f"编页统计已生成：{output / '编页统计.csv'}")
 
-    def paginate_image_groups(self, source: Path, folders: list[Path]) -> list[tuple[Path, list[Path]]]:
-        third_level_folders = [folder for folder in folders if self.folder_depth(source, folder) == 3]
+    def paginate_image_groups(self, source: Path, folders: list[Path], group_level: int) -> list[tuple[Path, list[Path]]]:
+        grouped_folders = [folder for folder in folders if self.folder_depth(source, folder) == group_level]
         groups: list[tuple[Path, list[Path]]] = []
-        for folder in sorted(third_level_folders, key=lambda p: [natural_key(Path(part)) for part in p.relative_to(source).parts]):
+        for folder in sorted(grouped_folders, key=lambda p: [natural_key(Path(part)) for part in p.relative_to(source).parts]):
             images = sorted(
                 [path for path in folder.rglob("*") if is_image(path)],
                 key=lambda path: [natural_key(Path(part)) for part in path.relative_to(folder).parts],
