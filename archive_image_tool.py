@@ -855,7 +855,7 @@ class ArchiveImageTool(tk.Tk):
                 f"A4横版 {counts.get('A4_LANDSCAPE', 0)} 张，"
                 f"小于A4 {counts.get('SMALLER_THAN_A4', 0)} 张。"
             )
-        tasks: list[tuple[Path, Path, Path, Path, int, str]] = []
+        tasks: list[tuple[Path, Path, Path, Path, int, int, str]] = []
 
         for group_index, (household_folder, images) in enumerate(images_by_folder, start=1):
             if images:
@@ -865,17 +865,22 @@ class ArchiveImageTool(tk.Tk):
                         f"{household_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。"
                     )
             page = start_page
+            duplex_folder_pages: dict[Path, int] = {}
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
                 target_folder.mkdir(parents=True, exist_ok=True)
                 side_folder = self.page_rule_folder_for_image(source, household_folder, image_path)
-                tasks.append((household_folder, side_folder, target_folder, image_path, page, layout_by_image.get(image_path, "A4_PORTRAIT")))
+                side_page = page
+                if self.folder_numeric_suffix(side_folder) in DUPLEX_PAGE_SUFFIXES:
+                    side_page = duplex_folder_pages.get(side_folder, 0) + 1
+                    duplex_folder_pages[side_folder] = side_page
+                tasks.append((household_folder, side_folder, target_folder, image_path, page, side_page, layout_by_image.get(image_path, "A4_PORTRAIT")))
                 page += 1
 
         rows = []
 
-        def paginate_task(task: tuple[Path, Path, Path, Path, int, str]) -> dict[str, object]:
-            household_folder, side_folder, target_folder, image_path, page, page_layout = task
+        def paginate_task(task: tuple[Path, Path, Path, Path, int, int, str]) -> dict[str, object]:
+            household_folder, side_folder, target_folder, image_path, page, side_page, page_layout = task
             page_text = f"{settings.page_prefix}{page}{settings.page_suffix}"
             try:
                 output_file, orientation_action = self.paginate_one_image(
@@ -887,6 +892,7 @@ class ArchiveImageTool(tk.Tk):
                     color,
                     suffix,
                     side_folder,
+                    side_page,
                     settings.erase_old_page_numbers,
                     settings.auto_orient_binding,
                     page_layout,
@@ -903,6 +909,7 @@ class ArchiveImageTool(tk.Tk):
                 "source_file": str(image_path),
                 "output_file": str(output_file),
                 "page": page,
+                "side_page": side_page,
                 "page_layout": page_layout,
                 "orientation_action": orientation_action,
                 "erase_old_page_numbers": settings.erase_old_page_numbers,
@@ -1054,6 +1061,7 @@ class ArchiveImageTool(tk.Tk):
         color: str,
         suffix: str,
         source_folder: Path,
+        side_page_number: int,
         erase_old_page_numbers: bool,
         auto_orient_binding: bool,
         page_layout: str,
@@ -1070,7 +1078,7 @@ class ArchiveImageTool(tk.Tk):
         draw = ImageDraw.Draw(image)
         font = self.load_font(font_size)
         orientation = "landscape" if image.width > image.height else "portrait"
-        side = self.page_side_for_folder(source_folder, page_number)
+        side = self.page_side_for_folder(source_folder, side_page_number)
         box = self.boxes[f"{orientation}_{side}"].to_pixels(image.width, image.height)
         x0, y0, x1, y1 = box
         bbox = draw.textbbox((0, 0), page_text, font=font)
