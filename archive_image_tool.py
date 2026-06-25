@@ -294,7 +294,7 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="同时处理源文件夹本身", variable=self.paginate_include_root).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
-        ttk.Label(panel, text="编号规则：按指定级别文件夹成册；每个成册文件夹内从起始页码编到最后。").grid(
+        ttk.Label(panel, text="编号规则：按户文件夹成册；户内按文件夹名称和图片名称顺序连续编号。").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
@@ -307,7 +307,7 @@ class ArchiveImageTool(tk.Tk):
         row = 5
         for label, var in (
             ("起始页码", self.start_page),
-            ("成册文件夹级数", self.paginate_group_level),
+            ("备用成册级数", self.paginate_group_level),
             ("字体大小", self.font_size),
             ("并行线程数", self.worker_count),
             ("页码前缀", self.page_prefix),
@@ -819,17 +819,21 @@ class ArchiveImageTool(tk.Tk):
             folders = [source]
 
         group_level = max(1, safe_int(settings.paginate_group_level, 3))
-        images_by_folder = self.paginate_image_groups(source, folders, group_level)
+        images_by_folder = self.household_image_groups(source)
+        if not images_by_folder:
+            images_by_folder = self.paginate_image_groups(source, folders, group_level)
         total = sum(len(items) for _, items in images_by_folder)
         if total == 0 and not settings.paginate_recursive:
             self.log_step("当前未勾选递归处理，直属文件夹未发现图片，自动改为扫描所有子文件夹。")
             folders = self.target_folders(source, True, settings.paginate_include_root)
-            images_by_folder = self.paginate_image_groups(source, folders, group_level)
+            images_by_folder = self.household_image_groups(source)
+            if not images_by_folder:
+                images_by_folder = self.paginate_image_groups(source, folders, group_level)
             total = sum(len(items) for _, items in images_by_folder)
         if total == 0:
             raise ValueError("没有找到可编页的图片文件。程序已经扫描源文件夹及所有子文件夹，请确认里面有 jpg/png/tif/bmp/webp 图片。")
         folders_with_images = sum(1 for _folder, items in images_by_folder if items)
-        self.log_step(f"扫描完成：按第 {group_level} 级文件夹分别成册编号；扫描分组 {len(images_by_folder)} 个，有图片分组 {folders_with_images} 个，图片 {total} 张。")
+        self.log_step(f"扫描完成：按户文件夹分别成册编号；扫描户 {len(images_by_folder)} 个，有图片户 {folders_with_images} 个，图片 {total} 张。")
 
         font_size = max(8, safe_int(settings.font_size, 36))
         start_page = max(1, safe_int(settings.start_page, 1))
@@ -850,26 +854,27 @@ class ArchiveImageTool(tk.Tk):
                 f"A4横版 {counts.get('A4_LANDSCAPE', 0)} 张，"
                 f"小于A4 {counts.get('SMALLER_THAN_A4', 0)} 张。"
             )
-        tasks: list[tuple[Path, Path, Path, int, str]] = []
+        tasks: list[tuple[Path, Path, Path, Path, int, str]] = []
 
-        for group_index, (group_folder, images) in enumerate(images_by_folder, start=1):
+        for group_index, (household_folder, images) in enumerate(images_by_folder, start=1):
             if images:
                 if group_index == 1 or group_index == len(images_by_folder) or group_index % 100 == 0:
                     self.log_step(
-                        f"建立编页任务 {group_index}/{len(images_by_folder)}："
-                        f"{group_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。"
+                        f"建立户内编页任务 {group_index}/{len(images_by_folder)}："
+                        f"{household_folder}，图片 {len(images)} 张，页码 {start_page}-{start_page + len(images) - 1}。"
                     )
             page = start_page
             for image_path in images:
                 target_folder = self.mirror_folder(source, image_path.parent, output_root)
                 target_folder.mkdir(parents=True, exist_ok=True)
-                tasks.append((group_folder, target_folder, image_path, page, layout_by_image.get(image_path, "A4_PORTRAIT")))
+                side_folder = self.page_rule_folder_for_image(source, household_folder, image_path)
+                tasks.append((household_folder, side_folder, target_folder, image_path, page, layout_by_image.get(image_path, "A4_PORTRAIT")))
                 page += 1
 
         rows = []
 
-        def paginate_task(task: tuple[Path, Path, Path, int, str]) -> dict[str, object]:
-            folder, target_folder, image_path, page, page_layout = task
+        def paginate_task(task: tuple[Path, Path, Path, Path, int, str]) -> dict[str, object]:
+            household_folder, side_folder, target_folder, image_path, page, page_layout = task
             page_text = f"{settings.page_prefix}{page}{settings.page_suffix}"
             try:
                 output_file, orientation_action = self.paginate_one_image(
@@ -880,7 +885,7 @@ class ArchiveImageTool(tk.Tk):
                     font_size,
                     color,
                     suffix,
-                    folder,
+                    side_folder,
                     settings.erase_old_page_numbers,
                     settings.auto_orient_binding,
                     page_layout,
@@ -892,7 +897,8 @@ class ArchiveImageTool(tk.Tk):
                 status = f"error: {exc}"
             return {
                 "type": "paginate",
-                "source_folder": str(folder),
+                "source_folder": str(household_folder),
+                "page_rule_folder": str(side_folder),
                 "source_file": str(image_path),
                 "output_file": str(output_file),
                 "page": page,
@@ -936,6 +942,49 @@ class ArchiveImageTool(tk.Tk):
             (folder, sorted([p for p in folder.iterdir() if is_image(p)], key=natural_key))
             for folder in folders
         ]
+
+    def household_image_groups(self, source: Path) -> list[tuple[Path, list[Path]]]:
+        households: dict[Path, list[Path]] = {}
+        for image_path in source.rglob("*"):
+            if not is_image(image_path):
+                continue
+            household = self.first_dash_folder(source, image_path.parent)
+            if household is None:
+                continue
+            households.setdefault(household, []).append(image_path)
+        groups: list[tuple[Path, list[Path]]] = []
+        for household, images in sorted(
+            households.items(),
+            key=lambda item: [natural_key(Path(part)) for part in item[0].relative_to(source).parts],
+        ):
+            groups.append(
+                (
+                    household,
+                    sorted(
+                        images,
+                        key=lambda path: [natural_key(Path(part)) for part in path.relative_to(household).parts],
+                    ),
+                )
+            )
+        return groups
+
+    def first_dash_folder(self, source: Path, folder: Path) -> Path | None:
+        current = source
+        for part in folder.relative_to(source).parts:
+            current = current / part
+            if "-" in part:
+                return current
+        return None
+
+    def page_rule_folder_for_image(self, source: Path, household_folder: Path, image_path: Path) -> Path:
+        current = source
+        for part in image_path.parent.relative_to(source).parts:
+            current = current / part
+            if current == household_folder:
+                continue
+            if self.folder_numeric_suffix(current) in {"0005", "0007"}:
+                return current
+        return household_folder
 
     def inspect_image_sizes(self, image_paths: list[Path], worker_count: int) -> dict[Path, tuple[int, int]]:
         sizes: dict[Path, tuple[int, int]] = {}
