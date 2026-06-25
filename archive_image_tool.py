@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageTk
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
 DEFAULT_MARGIN = 0.06
+DUPLEX_PAGE_SUFFIXES = {"0005", "0007", "0011"}
 
 
 def natural_key(path: Path) -> list[object]:
@@ -982,7 +983,7 @@ class ArchiveImageTool(tk.Tk):
             current = current / part
             if current == household_folder:
                 continue
-            if self.folder_numeric_suffix(current) in {"0005", "0007"}:
+            if self.folder_numeric_suffix(current) in DUPLEX_PAGE_SUFFIXES:
                 return current
         return household_folder
 
@@ -1090,7 +1091,7 @@ class ArchiveImageTool(tk.Tk):
         return output_file, orientation_action
 
     def page_side_for_folder(self, folder: Path, page_number: int) -> str:
-        if self.folder_numeric_suffix(folder) in {"0005", "0007"}:
+        if self.folder_numeric_suffix(folder) in DUPLEX_PAGE_SUFFIXES:
             return "front" if page_number % 2 else "back"
         return "front"
 
