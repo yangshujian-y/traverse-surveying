@@ -985,13 +985,9 @@ class ArchiveImageTool(tk.Tk):
         return None
 
     def page_rule_folder_for_image(self, source: Path, household_folder: Path, image_path: Path) -> Path:
-        current = source
-        for part in image_path.parent.relative_to(source).parts:
-            current = current / part
-            if current == household_folder:
-                continue
-            if self.folder_numeric_suffix(current) in DUPLEX_PAGE_SUFFIXES:
-                return current
+        image_folder = image_path.parent
+        if image_folder != household_folder and self.folder_numeric_suffix(image_folder) in DUPLEX_PAGE_SUFFIXES:
+            return image_folder
         return household_folder
 
     def inspect_image_sizes(self, image_paths: list[Path], worker_count: int) -> dict[Path, tuple[int, int]]:
