@@ -18,6 +18,12 @@
 
 也可以双击或运行 `run.command`。
 
+macOS 上也可以直接双击：
+
+```text
+启动归档图片工具.command
+```
+
 ## Windows 打包
 
 Windows 可执行文件需要在 Windows 电脑上生成。把本文件夹复制到 Windows 后，双击：
