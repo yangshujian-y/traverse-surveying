@@ -970,7 +970,7 @@ class ArchiveImageTool(tk.Tk):
 
     def page_rule_folder_for_image(self, source: Path, household_folder: Path, image_path: Path) -> Path:
         image_folder = image_path.parent
-        if self.folder_numeric_suffix(image_folder) in DUPLEX_PAGE_SUFFIXES:
+        if self.folder_numeric_suffix(image_folder):
             return image_folder
         return household_folder
 
