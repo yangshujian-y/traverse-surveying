@@ -132,7 +132,7 @@ class ArchiveImageTool(tk.Tk):
         self.page_prefix = tk.StringVar(value="")
         self.page_suffix = tk.StringVar(value="")
         self.file_suffix = tk.StringVar(value="_页码")
-        self.erase_old_page_numbers = tk.BooleanVar(value=False)
+        self.erase_old_page_numbers = tk.BooleanVar(value=True)
         self.worker_count = tk.StringVar(value="4")
 
         self.boxes = default_boxes()
@@ -987,9 +987,7 @@ class ArchiveImageTool(tk.Tk):
         side_page_number: int,
         erase_old_page_numbers: bool,
     ) -> Path:
-        source_image = Image.open(image_path)
-        save_kwargs = self.metadata_save_kwargs(source_image, image_path.suffix)
-        image = source_image.copy()
+        image = ImageOps.exif_transpose(Image.open(image_path))
         mode = image.mode
         if mode not in ("RGB", "RGBA"):
             image = image.convert("RGB")
@@ -1006,22 +1004,13 @@ class ArchiveImageTool(tk.Tk):
 
         output_name = f"{image_path.stem}{suffix}{image_path.suffix}" if suffix else image_path.name
         output_file = target_folder / output_name
+        save_kwargs: dict[str, object] = {"dpi": (300, 300)}
         if image_path.suffix.lower() in {".jpg", ".jpeg"}:
             save_kwargs.update({"quality": 95, "subsampling": 0})
             if image.mode == "RGBA":
                 image = image.convert("RGB")
         image.save(output_file, **save_kwargs)
         return output_file
-
-    def metadata_save_kwargs(self, source_image: Image.Image, suffix: str) -> dict[str, object]:
-        info = source_image.info
-        save_kwargs: dict[str, object] = {}
-        for key in ("dpi", "icc_profile", "exif"):
-            if key in info:
-                save_kwargs[key] = info[key]
-        if "transparency" in info and suffix.lower() == ".png":
-            save_kwargs["transparency"] = info["transparency"]
-        return save_kwargs
 
     def page_text_position(
         self,
