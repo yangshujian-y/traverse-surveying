@@ -927,11 +927,10 @@ class ArchiveImageTool(tk.Tk):
         for image_path in source.rglob("*"):
             if not is_image(image_path):
                 continue
-            household_folder, household_prefix = self.household_key_for_image(source, image_path)
+            household_folder = self.household_folder_for_image(source, image_path)
             if household_folder is None:
                 continue
-            household_key = household_folder.parent / household_prefix
-            households.setdefault(household_key, []).append(image_path)
+            households.setdefault(household_folder, []).append(image_path)
         groups: list[tuple[Path, list[Path]]] = []
         for household_key, images in sorted(
             households.items(),
@@ -949,24 +948,25 @@ class ArchiveImageTool(tk.Tk):
         return groups
 
     def household_key_for_image(self, source: Path, image_path: Path) -> tuple[Path | None, str]:
-        household_folder = self.first_typed_folder(source, image_path.parent)
+        household_folder = self.household_folder_for_image(source, image_path)
         if household_folder is None:
             return None, ""
-        return household_folder, self.household_prefix(household_folder)
+        return household_folder, household_folder.name
 
-    def first_typed_folder(self, source: Path, folder: Path) -> Path | None:
-        current = source
-        for part in folder.relative_to(source).parts:
-            current = current / part
-            if self.folder_numeric_suffix(current):
-                return current
+    def household_folder_for_image(self, source: Path, image_path: Path) -> Path | None:
+        image_folder = image_path.parent
+        if image_folder == source:
+            return None
+        if self.folder_numeric_suffix(image_folder):
+            household_folder = image_folder.parent
+            if household_folder != source:
+                return household_folder
+        if self.is_household_folder(image_folder):
+            return image_folder
         return None
 
-    def household_prefix(self, folder: Path) -> str:
-        suffix = self.folder_numeric_suffix(folder)
-        if suffix and folder.name.endswith(f"-{suffix}"):
-            return folder.name[: -(len(suffix) + 1)]
-        return folder.name
+    def is_household_folder(self, folder: Path) -> bool:
+        return bool(re.fullmatch(r".+-\d{4}", folder.name))
 
     def page_rule_folder_for_image(self, source: Path, household_folder: Path, image_path: Path) -> Path:
         image_folder = image_path.parent
