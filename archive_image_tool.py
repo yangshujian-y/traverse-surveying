@@ -293,7 +293,7 @@ class ArchiveImageTool(tk.Tk):
         ttk.Checkbutton(panel, text="同时处理源文件夹本身", variable=self.paginate_include_root).grid(
             row=1, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
-        ttk.Label(panel, text="编号规则：按户文件夹成册；户内按文件夹名称和图片名称顺序连续编号。").grid(
+        ttk.Label(panel, text="编号规则：按同一户前缀成册；户内按文件夹名称和图片名称顺序连续编号。").grid(
             row=2, column=0, columnspan=3, sticky="w", padx=8, pady=3
         )
         ttk.Checkbutton(panel, text="编页前智能擦除四角旧页码", variable=self.erase_old_page_numbers).grid(
@@ -927,37 +927,50 @@ class ArchiveImageTool(tk.Tk):
         for image_path in source.rglob("*"):
             if not is_image(image_path):
                 continue
-            household = self.first_dash_folder(source, image_path.parent)
-            if household is None:
+            household_folder, household_prefix = self.household_key_for_image(source, image_path)
+            if household_folder is None:
                 continue
-            households.setdefault(household, []).append(image_path)
+            household_key = household_folder.parent / household_prefix
+            households.setdefault(household_key, []).append(image_path)
         groups: list[tuple[Path, list[Path]]] = []
-        for household, images in sorted(
+        for household_key, images in sorted(
             households.items(),
             key=lambda item: [natural_key(Path(part)) for part in item[0].relative_to(source).parts],
         ):
             groups.append(
                 (
-                    household,
+                    household_key,
                     sorted(
                         images,
-                        key=lambda path: [natural_key(Path(part)) for part in path.relative_to(household).parts],
+                        key=lambda path: [natural_key(Path(part)) for part in path.relative_to(household_key.parent).parts],
                     ),
                 )
             )
         return groups
 
-    def first_dash_folder(self, source: Path, folder: Path) -> Path | None:
+    def household_key_for_image(self, source: Path, image_path: Path) -> tuple[Path | None, str]:
+        household_folder = self.first_typed_folder(source, image_path.parent)
+        if household_folder is None:
+            return None, ""
+        return household_folder, self.household_prefix(household_folder)
+
+    def first_typed_folder(self, source: Path, folder: Path) -> Path | None:
         current = source
         for part in folder.relative_to(source).parts:
             current = current / part
-            if "-" in part:
+            if self.folder_numeric_suffix(current):
                 return current
         return None
 
+    def household_prefix(self, folder: Path) -> str:
+        suffix = self.folder_numeric_suffix(folder)
+        if suffix and folder.name.endswith(f"-{suffix}"):
+            return folder.name[: -(len(suffix) + 1)]
+        return folder.name
+
     def page_rule_folder_for_image(self, source: Path, household_folder: Path, image_path: Path) -> Path:
         image_folder = image_path.parent
-        if image_folder != household_folder and self.folder_numeric_suffix(image_folder) in DUPLEX_PAGE_SUFFIXES:
+        if self.folder_numeric_suffix(image_folder) in DUPLEX_PAGE_SUFFIXES:
             return image_folder
         return household_folder
 
