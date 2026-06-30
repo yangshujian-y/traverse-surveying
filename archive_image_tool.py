@@ -97,10 +97,10 @@ class Settings:
 
 def default_boxes() -> dict[str, Box]:
     return {
-        "portrait_front": Box(0.88, 0.025, 0.965, 0.065),
-        "portrait_back": Box(0.035, 0.025, 0.12, 0.065),
-        "landscape_front": Box(0.90, 0.03, 0.975, 0.085),
-        "landscape_back": Box(0.025, 0.03, 0.10, 0.085),
+        "portrait_front": Box(0.90, 0.010, 0.992, 0.050),
+        "portrait_back": Box(0.008, 0.010, 0.100, 0.050),
+        "landscape_front": Box(0.925, 0.010, 0.992, 0.060),
+        "landscape_back": Box(0.008, 0.010, 0.075, 0.060),
     }
 
 
@@ -512,11 +512,8 @@ class ArchiveImageTool(tk.Tk):
         font_size = max(8, int(safe_int(self.font_size.get(), 36) * image.width / max(self.preview_image_size[0], 1)))
         font = self.load_font(font_size)
         text = self.preview_page_text.get().strip() or "1"
-        bbox = draw.textbbox((0, 0), text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = x0 + max(0, (x1 - x0 - text_width) // 2)
-        y = y0 + max(0, (y1 - y0 - text_height) // 2)
+        side = "back" if key.endswith("_back") else "front"
+        x, y = self.page_text_position(draw, text, font, (x0, y0, x1, y1), side)
         draw.text((x, y), text, fill=parse_color(self.font_color.get()), font=font)
 
     def draw_saved_box(self) -> None:
@@ -1077,11 +1074,7 @@ class ArchiveImageTool(tk.Tk):
         side = self.page_side_for_folder(source_folder, side_page_number)
         box = self.boxes[f"{orientation}_{side}"].to_pixels(image.width, image.height)
         x0, y0, x1, y1 = box
-        bbox = draw.textbbox((0, 0), page_text, font=font)
-        text_width = bbox[2] - bbox[0]
-        text_height = bbox[3] - bbox[1]
-        x = x0 + max(0, (x1 - x0 - text_width) // 2)
-        y = y0 + max(0, (y1 - y0 - text_height) // 2)
+        x, y = self.page_text_position(draw, page_text, font, (x0, y0, x1, y1), side)
         draw.text((x, y), page_text, fill=color, font=font)
 
         output_name = f"{image_path.stem}{suffix}{image_path.suffix}" if suffix else image_path.name
@@ -1093,6 +1086,26 @@ class ArchiveImageTool(tk.Tk):
                 image = image.convert("RGB")
         image.save(output_file, **save_kwargs)
         return output_file, orientation_action
+
+    def page_text_position(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+        box: tuple[int, int, int, int],
+        side: str,
+    ) -> tuple[int, int]:
+        x0, y0, x1, y1 = box
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        pad = max(1, int(text_height * 0.15))
+        if side == "back":
+            x = x0 + pad
+        else:
+            x = x1 - text_width - pad
+        y = y0 + pad
+        return max(0, x), max(0, y)
 
     def page_side_for_folder(self, folder: Path, page_number: int) -> str:
         if self.folder_numeric_suffix(folder) in DUPLEX_PAGE_SUFFIXES:
